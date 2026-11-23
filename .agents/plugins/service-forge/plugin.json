@@ -1,0 +1,11 @@
+{
+  "name": "service-forge",
+  "displayName": "Service Forge",
+  "version": "0.1.0",
+  "description": "Sans-I/O service governance, Expand/Contract state compatibility verification, and SLSA release guardrails.",
+  "suggestedPrompts": [
+    "Verify service-template gates and inspect schema/compatibility.json parity",
+    "Probe Expand/Contract snapshot upgrade and canary rollback invariants",
+    "Package deterministic release artifacts and validate tag preflight"
+  ]
+}

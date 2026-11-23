@@ -1,0 +1,108 @@
+name: Cut Release Tag
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to create (vX.Y.Z or vX.Y.Z-(alpha|beta|rc).N)"
+        required: true
+        type: string
+      target_sha:
+        description: "Exact 40-hex commit SHA reachable on origin/main or origin/release/X.Y"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  verify-candidate:
+    name: verify-candidate
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      verified_sha: ${{ steps.emit.outputs.verified_sha }}
+      tag_name: ${{ steps.emit.outputs.tag_name }}
+    steps:
+      - name: Validate 40-hex target_sha syntax
+        env:
+          TARGET_SHA: ${{ inputs.target_sha }}
+        run: |
+          case "${TARGET_SHA}" in
+            *[!0-9a-f]*|"") echo "error: target_sha must be 40 lowercase hex chars" >&2; exit 1 ;;
+          esac
+          if [ "${#TARGET_SHA}" -ne 40 ]; then
+            echo "error: target_sha must be exactly 40 hex chars" >&2
+            exit 1
+          fi
+
+      - name: Checkout candidate commit without persisting credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.target_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install Rust 1.100.0 toolchain
+        uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc
+        with:
+          toolchain: "1.100.0"
+          components: rustfmt, clippy
+          targets: thumbv7em-none-eabi
+
+      - name: Cache Cargo build artifacts
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+
+      - name: Verify candidate lineage, gates, preflight, and reproducible package
+        env:
+          TARGET_TAG: ${{ inputs.tag }}
+          TARGET_SHA: ${{ inputs.target_sha }}
+        run: |
+          actual_sha="$(git rev-parse HEAD)"
+          if [ "${actual_sha}" != "${TARGET_SHA}" ]; then
+            echo "error: checked-out HEAD (${actual_sha}) != target_sha (${TARGET_SHA})" >&2
+            exit 1
+          fi
+          cargo xtask release-lineage "${TARGET_TAG}" --commit "${TARGET_SHA}"
+          cargo xtask verify --force
+          cargo xtask preflight-tag "${TARGET_TAG}"
+          cargo xtask package
+
+      - name: Emit verified candidate outputs
+        id: emit
+        env:
+          TARGET_TAG: ${{ inputs.tag }}
+          TARGET_SHA: ${{ inputs.target_sha }}
+        run: |
+          printf 'verified_sha=%s\n' "${TARGET_SHA}" >> "${GITHUB_OUTPUT}"
+          printf 'tag_name=%s\n' "${TARGET_TAG}" >> "${GITHUB_OUTPUT}"
+
+  create-release-tag:
+    name: create-release-tag
+    if: github.ref == 'refs/heads/main'
+    needs:
+      - verify-candidate
+    runs-on: ubuntu-latest
+    environment: tag-release
+    permissions:
+      contents: read
+    steps:
+      - name: Create release tag ref via GitHub REST API (no checkout, no code execution)
+        env:
+          GH_TOKEN: ${{ secrets.TAG_CREATOR_TOKEN }}
+          TAG_NAME: ${{ needs.verify-candidate.outputs.tag_name }}
+          VERIFIED_SHA: ${{ needs.verify-candidate.outputs.verified_sha }}
+        run: |
+          if [ -z "${GH_TOKEN}" ]; then
+            echo "error: environment secret TAG_CREATOR_TOKEN is not configured in the 'tag-release' GitHub Environment." >&2
+            echo "hint: configure TAG_CREATOR_TOKEN scoped strictly to Environment 'tag-release', OR push a locally signed admin tag directly ('git tag -s ${TAG_NAME} ${VERIFIED_SHA} && git push origin ${TAG_NAME}') with zero GitHub Secrets." >&2
+            exit 1
+          fi
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/git/refs" \
+            -f "ref=refs/tags/${TAG_NAME}" \
+            -f "sha=${VERIFIED_SHA}"

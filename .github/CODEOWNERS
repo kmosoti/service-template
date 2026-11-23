@@ -1,0 +1,10 @@
+# Code ownership rules are intentionally left unconfigured in the base template so
+# fresh clones never fail GitHub owner resolution on placeholder team handles.
+#
+# After instantiating this template in your user or organization account, optionally
+# uncomment and set real GitHub handles/teams, then set `require_code_owner_review: true`
+# in `xtask/src/github.rs` if multi-team ownership is desired:
+#
+# /schema/compatibility.json @your-github-handle
+# /.github/ @your-github-handle
+# /xtask/ @your-github-handle

@@ -1,0 +1,7 @@
+{
+  "config_schema_version": 1,
+  "window_ms": 1000,
+  "max_units_per_window": 100,
+  "max_burst_units": 25,
+  "state_write_version": 2
+}

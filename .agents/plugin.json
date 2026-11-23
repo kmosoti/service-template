@@ -1,0 +1,11 @@
+{
+  "name": "service-template-agents",
+  "displayName": "Service Template Workspace Agents",
+  "version": "0.1.0",
+  "description": "Workspace skills and PreToolUse governance guardrails for service-template.",
+  "suggestedPrompts": [
+    "Run cargo xtask verify and inspect clean-tree verification receipts",
+    "Verify schema/compatibility.json Expand/Contract invariants",
+    "Package release-manifest.json and verify stripped binary hygiene"
+  ]
+}

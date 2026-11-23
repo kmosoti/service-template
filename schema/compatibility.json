@@ -1,0 +1,17 @@
+{
+  "schema": "service.compatibility/v1",
+  "service_name": "admission-engine",
+  "config_schema_version": 1,
+  "state_format_version": 2,
+  "min_readable_state_format": 1,
+  "oldest_writable_state_format": 1,
+  "transition_mode": "expand",
+  "preserved_state_fields": [
+    "window_epoch_ms",
+    "consumed_units",
+    "last_sequence"
+  ],
+  "version_specific_defaults": {
+    "v1_to_v2_audit_epoch": 1
+  }
+}

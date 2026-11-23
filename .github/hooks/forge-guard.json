@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "hooks": {
+    "preToolUse": [
+      {
+        "type": "command",
+        "bash": "cargo run --quiet --package xtask --locked -- hook pre-tool-use --format copilot",
+        "powershell": "cargo run --quiet --package xtask --locked -- hook pre-tool-use --format copilot",
+        "cwd": ".",
+        "timeoutSec": 30
+      }
+    ]
+  }
+}

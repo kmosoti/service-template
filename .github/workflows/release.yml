@@ -1,0 +1,200 @@
+name: SLSA Attested Service Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-and-attest:
+    name: build-and-attest
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: Checkout repository without persisted credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install Rust 1.100.0 toolchain
+        uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc
+        with:
+          toolchain: "1.100.0"
+          components: rustfmt, clippy
+          targets: thumbv7em-none-eabi
+
+      - name: Cache Cargo build artifacts
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+
+      - name: Verify exact branch lineage for release tag
+        run: cargo xtask release-lineage "${GITHUB_REF_NAME}"
+
+      - name: Run full verification suite
+        run: cargo xtask verify --force
+
+      - name: Validate release tag preflight
+        run: cargo xtask preflight-tag "${GITHUB_REF_NAME}"
+
+      - name: Package stripped release bundle and manifest
+        run: cargo xtask package --out dist
+
+      - name: Generate SLSA build provenance attestations
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            dist/*.tar.gz
+            dist/compatibility.json
+            dist/release-manifest.json
+            dist/SHA256SUMS
+
+      - name: Upload attested release bundle
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-dist
+          if-no-files-found: error
+          path: dist/*
+
+      - name: Upload verified release notes
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-notes
+          if-no-files-found: error
+          path: docs/releases/${{ github.ref_name }}.md
+
+  publish-prerelease:
+    name: publish-prerelease
+    needs: build-and-attest
+    if: contains(github.ref_name, '-alpha.') || contains(github.ref_name, '-beta.') || contains(github.ref_name, '-rc.')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download attested release bundle
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-dist
+          path: dist
+
+      - name: Download verified release notes
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-notes
+          path: notes
+
+      - name: Draft-first prerelease upload, digest check, and atomic publish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          (cd dist && sha256sum -c SHA256SUMS)
+          expected="$(awk '{print "sha256:" $1 "  " $2}' dist/SHA256SUMS | LC_ALL=C sort)"
+          expected="${expected}"$'\n'"sha256:$(sha256sum dist/SHA256SUMS | awk '{print $1}')  SHA256SUMS"
+          expected="$(printf '%s\n' "${expected}" | LC_ALL=C sort)"
+
+          if existing_json="$(gh release view "${TAG}" --json isDraft,assets 2>/dev/null)"; then
+            is_draft="$(printf '%s' "${existing_json}" | jq -r '.isDraft')"
+            if [ "${is_draft}" = "false" ]; then
+              actual="$(printf '%s' "${existing_json}" | jq -r '.assets[] | "\(.digest)  \(.name)"' | LC_ALL=C sort)"
+              if [ "${actual}" = "${expected}" ]; then
+                echo "idempotent retry: published prerelease ${TAG} matches all SHA256SUMS digests"
+                exit 0
+              fi
+              echo "error: published prerelease ${TAG} already exists with mismatched asset digests" >&2
+              exit 1
+            fi
+            gh release delete "${TAG}" --yes
+          fi
+
+          notes_file="$(find notes -name "${TAG}.md" -print -quit)"
+          gh release create "${TAG}" \
+            dist/admission-engine-"${TAG}"-*.tar.gz \
+            dist/compatibility.json \
+            dist/release-manifest.json \
+            dist/SHA256SUMS \
+            --draft \
+            --prerelease \
+            --verify-tag \
+            --title "${TAG}" \
+            --notes-file "${notes_file}"
+
+          draft_assets="$(gh release view "${TAG}" --json assets | jq -r '.assets[] | "\(.digest)  \(.name)"' | LC_ALL=C sort)"
+          if [ "${draft_assets}" != "${expected}" ]; then
+            echo "error: draft release assets for ${TAG} did not match expected SHA-256 digests" >&2
+            exit 1
+          fi
+          gh release edit "${TAG}" --draft=false
+
+  publish-stable:
+    name: publish-stable
+    needs: build-and-attest
+    if: "!contains(github.ref_name, '-')"
+    runs-on: ubuntu-latest
+    environment: stable-publish
+    permissions:
+      contents: write
+    steps:
+      - name: Download attested release bundle
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-dist
+          path: dist
+
+      - name: Download verified release notes
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-notes
+          path: notes
+
+      - name: Draft-first stable upload, digest check, and atomic publish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          (cd dist && sha256sum -c SHA256SUMS)
+          expected="$(awk '{print "sha256:" $1 "  " $2}' dist/SHA256SUMS | LC_ALL=C sort)"
+          expected="${expected}"$'\n'"sha256:$(sha256sum dist/SHA256SUMS | awk '{print $1}')  SHA256SUMS"
+          expected="$(printf '%s\n' "${expected}" | LC_ALL=C sort)"
+
+          if existing_json="$(gh release view "${TAG}" --json isDraft,assets 2>/dev/null)"; then
+            is_draft="$(printf '%s' "${existing_json}" | jq -r '.isDraft')"
+            if [ "${is_draft}" = "false" ]; then
+              actual="$(printf '%s' "${existing_json}" | jq -r '.assets[] | "\(.digest)  \(.name)"' | LC_ALL=C sort)"
+              if [ "${actual}" = "${expected}" ]; then
+                echo "idempotent retry: published release ${TAG} matches all SHA256SUMS digests"
+                exit 0
+              fi
+              echo "error: published release ${TAG} already exists with mismatched asset digests" >&2
+              exit 1
+            fi
+            gh release delete "${TAG}" --yes
+          fi
+
+          notes_file="$(find notes -name "${TAG}.md" -print -quit)"
+          gh release create "${TAG}" \
+            dist/admission-engine-"${TAG}"-*.tar.gz \
+            dist/compatibility.json \
+            dist/release-manifest.json \
+            dist/SHA256SUMS \
+            --draft \
+            --verify-tag \
+            --title "${TAG}" \
+            --notes-file "${notes_file}"
+
+          draft_assets="$(gh release view "${TAG}" --json assets | jq -r '.assets[] | "\(.digest)  \(.name)"' | LC_ALL=C sort)"
+          if [ "${draft_assets}" != "${expected}" ]; then
+            echo "error: draft release assets for ${TAG} did not match expected SHA-256 digests" >&2
+            exit 1
+          fi
+          gh release edit "${TAG}" --draft=false

@@ -1,0 +1,11 @@
+# <type>(<scope>): <concise imperative summary>
+#
+# Explain the motivation, compatibility impact, and failure modes addressed.
+#
+# Two-commit verifier protocol:
+# - Commit 1 (tests, xtask gates, workflows) MUST include `Trust-Boundary: verifier`
+# - Commit 2 (`crates/*/src/**` production code) MUST NOT modify verifier paths
+#
+# Trailers (uncomment as applicable):
+# Trust-Boundary: verifier
+# Compatibility-Impact: steady
